@@ -28,6 +28,9 @@ allowed-tools:
   - Bash(aws s3 *)
   - Bash(aws ssm start-session *)
   - Bash(aws sts get-caller-identity)
+  - Bash(aws logs *)
+  - Bash(aws iam get-role*)
+  - Bash(aws iam list-*)
 hooks:
   PreToolUse:
     - matcher: Bash(aws sagemaker create-cluster*)
