@@ -605,12 +605,35 @@ For the specific model, verify:
 - Resolution: Delete unused VPCs or request quota increase
 - Check VPCs: `aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId,Tags[?Key==Name].Value|[0]]'`
 
+**"EFA health checks did not run successfully"**
+- **CRITICAL**: EFA requires all instances to be in the SAME Availability Zone
+- Root cause: HyperPod cluster configured with subnets in multiple AZs
+- Resolution: Use `OverrideVpcConfig` to specify a SINGLE subnet when creating the cluster:
+  ```bash
+  aws sagemaker create-cluster \
+    --cluster-name my-cluster \
+    --instance-groups '[{
+      "InstanceGroupName": "workers",
+      "InstanceType": "ml.trn1.32xlarge",
+      "InstanceCount": 2,
+      "OverrideVpcConfig": {
+        "SecurityGroupIds": ["sg-xxx"],
+        "Subnets": ["subnet-single-az"]  # ONE subnet only!
+      },
+      ...
+    }]'
+  ```
+- Cannot update OverrideVpcConfig on existing cluster - must delete and recreate
+- Security group must allow all traffic within itself (IpProtocol: -1)
+
 **Nodes stuck in Pending/ShuttingDown cycle**
-- Could be: capacity issues, health check failures, or networking problems
+- Most common cause: **EFA health check failure** due to multi-AZ deployment
+- Other causes: capacity issues, health check failures, networking problems
 - Check CloudWatch logs: `/aws/sagemaker/Clusters/<cluster>/<id>`
 - Verify instance type availability in subnet AZs
 - Check EKS access entries include the execution role
 - Verify Helm dependencies are installed
+- **Solution**: Ensure all instances use a single subnet in one AZ
 
 ## Important Notes
 
