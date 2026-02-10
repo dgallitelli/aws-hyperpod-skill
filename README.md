@@ -14,22 +14,19 @@ Amazon SageMaker HyperPod is a managed service for provisioning resilient ML tra
 
 ## Installation
 
-Clone this repository into your Claude Code skills directory:
-
 ```bash
-cd ~/.claude/skills
-git clone https://github.com/dgallitelli/aws-hyperpod-skill.git
+git clone https://github.com/dgallitelli/aws-hyperpod-skill.git ~/.claude/skills/sagemaker-hyperpod
 ```
 
-Or add to your `~/.claude/settings.json`:
+Restart Claude Code to activate the skill.
 
-```json
-{
-  "skills": [
-    "/path/to/aws-hyperpod-skill"
-  ]
-}
-```
+## Usage
+
+Trigger the skill by saying:
+- "Create a HyperPod cluster"
+- "Set up distributed training on AWS"
+- "Help me configure Slurm for ML training"
+- `/sagemaker-hyperpod`
 
 ## Features
 
@@ -55,72 +52,17 @@ Or add to your `~/.claude/settings.json`:
 - ml.trn1.32xlarge (AWS Trainium)
 - ml.trn1n.32xlarge (AWS Trainium with enhanced networking)
 
-## Quick Start
-
-### Trigger the Skill
-
-Say any of:
-- "Create a HyperPod cluster"
-- "Set up distributed training on AWS"
-- "Help me configure Slurm for ML training"
-- "/hyperpod"
-
-### Example Workflow
-
-1. **Validate prerequisites**
-   ```bash
-   bash scripts/validate-prerequisites.sh --region us-west-2
-   ```
-
-2. **Create cluster** (EKS)
-   ```bash
-   hyp init cluster-stack
-   hyp configure --resource-name-prefix my-cluster
-   hyp validate
-   hyp create --region us-west-2
-   ```
-
-3. **Submit training job**
-   ```bash
-   hyp create hyp-pytorch-job \
-     --job-name my-training \
-     --image <training-image> \
-     --instance-type ml.p5.48xlarge \
-     --node-count 4
-   ```
-
-## Documentation Structure
+## Structure
 
 ```
-plugins/aws-hyperpod/skills/sagemaker-hyperpod/
-├── SKILL.md                          # Main skill definition
+sagemaker-hyperpod/
+├── SKILL.md              # Skill definition
 ├── orchestrators/
-│   ├── eks/                          # EKS-specific guides
-│   └── slurm/                        # Slurm-specific guides
-├── references/
-│   ├── prerequisites-checklist.md
-│   ├── iam-policies.md
-│   ├── networking-patterns.md
-│   ├── lifecycle-scripts.md
-│   └── instance-types.md
-├── scripts/                          # Validation scripts
-└── examples/                         # Configuration examples
-```
-
-## MCP Server Integration
-
-This skill includes the SageMaker AI MCP server for enhanced functionality:
-
-```json
-{
-  "mcpServers": {
-    "sagemaker": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["awslabs.sagemaker-ai-mcp-server@latest", "--allow-write"]
-    }
-  }
-}
+│   ├── eks/              # EKS guides
+│   └── slurm/            # Slurm guides
+├── references/           # IAM, networking, prerequisites
+├── scripts/              # Validation scripts
+└── examples/             # Config examples
 ```
 
 ## Requirements
@@ -139,10 +81,6 @@ This skill includes the SageMaker AI MCP server for enhanced functionality:
 ### For Slurm Orchestration
 - Session Manager Plugin (for SSM access)
 
-## Contributing
-
-Contributions welcome! Please read the contribution guidelines before submitting PRs.
-
 ## License
 
 Apache-2.0
@@ -151,4 +89,3 @@ Apache-2.0
 
 - [SageMaker HyperPod Documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html)
 - [HyperPod CLI Documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-cli.html)
-- [AWS ML Blog](https://aws.amazon.com/blogs/machine-learning/)
