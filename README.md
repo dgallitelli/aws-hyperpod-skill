@@ -14,17 +14,22 @@ Amazon SageMaker HyperPod is a managed service for provisioning resilient ML tra
 
 ## Installation
 
-### From Claude Code Marketplace
+Clone this repository into your Claude Code skills directory:
 
 ```bash
-claude skill install aws-hyperpod
+cd ~/.claude/skills
+git clone https://github.com/dgallitelli/aws-hyperpod-skill.git
 ```
 
-### Manual Installation
+Or add to your `~/.claude/settings.json`:
 
-1. Clone this repository
-2. Add to your Claude Code skills directory
-3. Restart Claude Code
+```json
+{
+  "skills": [
+    "/path/to/aws-hyperpod-skill"
+  ]
+}
+```
 
 ## Features
 
