@@ -342,6 +342,37 @@ aws eks describe-cluster-versions --region us-east-1 \
   --query 'clusterVersions[?status==`STANDARD_SUPPORT`].clusterVersion' --output text | head -1
 ```
 
+### CRITICAL: Check Add-on Compatibility Before Upgrading
+
+**WARNING**: HyperPod-specific EKS add-ons may NOT support the latest Kubernetes versions. Always verify compatibility before upgrading.
+
+```bash
+# Check supported K8s versions for each HyperPod add-on
+aws eks describe-addon-versions --addon-name amazon-sagemaker-hyperpod-taskgovernance \
+  --query 'addons[0].addonVersions[*].compatibilities[*].clusterVersion' --output text
+
+aws eks describe-addon-versions --addon-name amazon-sagemaker-hyperpod-observability \
+  --query 'addons[0].addonVersions[*].compatibilities[*].clusterVersion' --output text
+
+aws eks describe-addon-versions --addon-name amazon-sagemaker-hyperpod-training-operator \
+  --query 'addons[0].addonVersions[*].compatibilities[*].clusterVersion' --output text
+```
+
+**Add-on Compatibility Matrix (as of Feb 2025):**
+| Add-on | Supported K8s Versions |
+|--------|----------------------|
+| hyperpod-training-operator | 1.30 - 1.33 |
+| hyperpod-taskgovernance | 1.30 - 1.33 |
+| hyperpod-observability | 1.30 - 1.33 |
+
+**IMPORTANT**: EKS does NOT support downgrading. If you upgrade to a K8s version that HyperPod add-ons don't support, you cannot roll back. You would need to recreate the cluster.
+
+**Recommendation**: Before upgrading K8s versions:
+1. Check if you need HyperPod-specific add-ons (task governance, observability)
+2. Verify add-on compatibility with target K8s version
+3. Stay on a supported version (e.g., 1.33) if add-ons are required
+4. K8s 1.33 remains in standard support until July 29, 2026
+
 **Upgrading existing clusters** (one version at a time):
 ```bash
 aws eks update-cluster-version --name CLUSTER_NAME --region REGION --kubernetes-version 1.XX
@@ -512,19 +543,31 @@ kubectl get pods -n aws-hyperpod  # Should show Running
 
 ### Install Other Add-ons (Optional)
 
+**IMPORTANT**: These add-ons only support K8s versions 1.30-1.33. Check compatibility before installing:
 ```bash
-# Task Governance (for resource quotas)
+aws eks describe-addon-versions --addon-name amazon-sagemaker-hyperpod-taskgovernance \
+  --query 'addons[0].addonVersions[0].compatibilities[*].clusterVersion' --output text
+```
+
+```bash
+# Task Governance (for resource quotas) - Requires K8s 1.30-1.33
 aws eks create-addon \
   --cluster-name <EKS_CLUSTER_NAME> \
   --addon-name amazon-sagemaker-hyperpod-taskgovernance \
   --region <REGION>
 
-# Observability (for centralized logging)
+# Observability (for centralized logging) - Requires K8s 1.30-1.33
+# Also requires Amazon Managed Prometheus (AMP) workspace
 aws eks create-addon \
   --cluster-name <EKS_CLUSTER_NAME> \
   --addon-name amazon-sagemaker-hyperpod-observability \
+  --addon-configuration '{"ampWorkspace":{"prometheusEndpoint":"https://aps-workspaces.<REGION>.amazonaws.com/workspaces/<WORKSPACE_ID>/"}}' \
   --region <REGION>
 ```
+
+**If K8s version is not supported**, use alternatives:
+- **CloudWatch Container Insights** for observability (works on all K8s versions)
+- **Kueue** for resource quotas (native Kubernetes solution)
 
 ### Workaround: Use Kubeflow PyTorchJob
 
