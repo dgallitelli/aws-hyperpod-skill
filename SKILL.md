@@ -550,17 +550,32 @@ spec:
 
 ## Job Submission (EKS)
 
-### Resource Allocation Note
+### Resource Allocation Options
 
-**HyperPodPyTorchJob** (via `hyp create`) requests **full node resources** by default:
-- For ml.trn1.32xlarge: 119 CPUs, 461Gi memory, 16 Neuron devices, 8 EFA
-- This may fail scheduling if system daemons use some CPU
+**HyperPodPyTorchJob** (via `hyp create`) supports two modes:
 
-**For simple test jobs**, use standard Kubeflow PyTorchJob with explicit resource requests:
+1. **Full node allocation** (`--node-count`): Requests entire node resources
+   - For ml.trn1.32xlarge: 119 CPUs, 461Gi memory, 16 Neuron devices, 8 EFA
+   - May fail if system daemons reserve CPU
+
+2. **Partial resources** (`--accelerators`, `--vcpu`, `--memory`): Specify exact requirements
+   ```bash
+   hyp create hyp-pytorch-job \
+     --job-name my-job \
+     --image <IMAGE> \
+     --command "[python3,train.py]" \
+     --instance-type ml.trn1.32xlarge \
+     --accelerators 1 \
+     --vcpu 4 \
+     --memory 16
+   ```
+   **Note:** Cannot combine `--node-count` with resource flags.
+
+**For simple test jobs**, use standard Kubeflow PyTorchJob:
 ```yaml
 resources:
   requests:
-    aws.amazon.com/neuron: "1"  # Request only 1 Neuron device
+    aws.amazon.com/neuron: "1"
   limits:
     aws.amazon.com/neuron: "1"
 ```
