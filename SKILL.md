@@ -333,7 +333,7 @@ aws eks describe-cluster-versions --region us-east-1 --output table
 In config.yaml, always set:
 ```yaml
 # Check latest with: aws eks describe-cluster-versions
-kubernetes_version: 1.34  # Use current default, NOT hardcoded old versions
+kubernetes_version: 1.35  # Use current default, NOT hardcoded old versions
 ```
 
 **Upgrading existing clusters** (one version at a time):
