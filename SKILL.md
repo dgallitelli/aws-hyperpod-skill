@@ -188,9 +188,11 @@ aws service-quotas list-service-quotas \
 | ml.trn1n.32xlarge | YES | Requires quota increase |
 | ml.trn2.48xlarge | YES | Requires quota increase |
 
-### 2. Validate EKS Requires 2+ Availability Zones
+### 2. Validate Availability Zone Requirements
 
-**CRITICAL for EKS orchestrator**: EKS control plane requires subnets in at least **2 different Availability Zones**. Single-AZ configurations will fail with `InvalidParameterException`.
+**EKS (CRITICAL)**: Requires subnets in at least **2 different Availability Zones**. Single-AZ will fail with `InvalidParameterException`.
+
+**Slurm**: Single AZ is acceptable. Can use `--vpc-config` with one subnet.
 
 ```bash
 # Check AZ availability for your instance type
@@ -201,10 +203,13 @@ aws ec2 describe-instance-type-offerings \
   --query 'InstanceTypeOfferings[*].Location' \
   --output text
 
-# Example config.yaml - MUST have 2+ AZs for EKS:
+# EKS config.yaml - MUST have 2+ AZs:
 # availability_zone_ids:
 #   - use1-az6  # Primary for Trainium workers
 #   - use1-az4  # Secondary for EKS HA
+
+# Slurm create_cluster.json - Single AZ OK:
+# "VpcConfig": { "Subnets": ["subnet-xxx"], "SecurityGroupIds": ["sg-xxx"] }
 ```
 
 ### 3. Validate Instance Count Against Quota
@@ -484,6 +489,73 @@ aws cloudtrail lookup-events \
 
 # PART 3: SLURM ORCHESTRATOR (AWS CLI)
 
+## Slurm vs EKS: Key Differences
+
+| Aspect | Slurm | EKS |
+|--------|-------|-----|
+| **AZ Requirement** | Single AZ OK | **2+ AZs Required** |
+| **VPC Config** | Optional (uses HyperPod default) | Required |
+| **Configuration Files** | `create_cluster.json` + `provisioning_parameters.json` | `config.yaml` |
+| **Lifecycle Scripts** | Required (uploaded to S3) | Not required |
+| **Job Submission** | SBATCH scripts | PyTorchJob via kubectl/hyp |
+| **Access Method** | SSM Session Manager | kubectl |
+
+## CRITICAL: Slurm Pre-Creation Checklist
+
+**ALWAYS perform these validations BEFORE creating a Slurm cluster:**
+
+### 1. Instance Type Quota Check
+```bash
+# Verify instance type is supported for cluster usage
+aws service-quotas list-service-quotas \
+  --service-code sagemaker \
+  --region us-east-1 \
+  --query 'Quotas[?contains(QuotaName, `<INSTANCE_TYPE>`) && contains(QuotaName, `cluster`)].[QuotaName,Value]'
+```
+
+### 2. Validate Configuration Files
+```bash
+# Clone awsome-distributed-training for validation script
+git clone https://github.com/aws-samples/awsome-distributed-training.git
+cd awsome-distributed-training/1.architectures/5.sagemaker-hyperpod/
+
+# Run validation BEFORE cluster creation
+python3 validate-config.py \
+  --cluster-config create_cluster.json \
+  --provisioning-parameters provisioning_parameters.json
+```
+
+The validation script checks:
+- Instance group names match between files
+- Subnet configurations are valid
+- Security group rules (ingress/egress)
+- FSx Lustre DNS name and mount name
+- Cross-resource consistency
+
+### 3. Instance Group Name Matching (CRITICAL)
+
+**Most common Slurm gotcha**: Instance group names in `create_cluster.json` MUST match those in `provisioning_parameters.json`:
+
+```
+create_cluster.json                    provisioning_parameters.json
+Instance Groups:                       Slurm Nodes:
+- controller-machine          ------>  instance_group: controller-machine
+- login-group                 ------>  instance_group: login-group (optional)
+- compute-nodes               ------>  instance_group: compute-nodes
+```
+
+### 4. EFA Security Group (for GPU/Trainium instances)
+
+Security group MUST allow all traffic within itself:
+```bash
+# Create self-referencing rule for EFA
+aws ec2 authorize-security-group-ingress \
+  --group-id sg-xxx \
+  --protocol all \
+  --port -1 \
+  --source-group sg-xxx
+```
+
 ## Prerequisites
 
 - AWS CLI v2
@@ -494,21 +566,24 @@ aws cloudtrail lookup-events \
 
 ### 1. Prepare Lifecycle Scripts
 
-**Recommended**: Use the sample lifecycle scripts from the AWS Samples repository:
+**STRONGLY Recommended**: Use the production-ready lifecycle scripts from AWS Samples:
 ```bash
 git clone https://github.com/aws-samples/awsome-distributed-training.git
-cd awsome-distributed-training/1.architectures/5.sagemaker-hyperpod/
+cd awsome-distributed-training/1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config/
 ```
 
-This repository contains production-ready lifecycle scripts for:
-- Slurm controller and compute nodes
-- EKS-based clusters
-- Trainium/Inferentia setup with Neuron SDK
-- NVIDIA GPU clusters with NCCL
-- FSx Lustre mounting
-- Health monitoring agents
+Key files in base-config:
+| File | Purpose |
+|------|---------|
+| `lifecycle_script.py` | Primary orchestration script |
+| `on_create.sh` | Initial setup during cluster creation |
+| `provisioning_parameters.json` | Slurm node configuration |
+| `start_slurm.sh` | Slurm daemon startup |
+| `mount_fsx.sh` | FSx Lustre mounting |
+| `setup_mariadb_accounting.sh` | Local Slurm accounting |
+| `install_docker.sh` | Docker installation |
 
-**Or create a minimal `on_create.sh`** for node initialization:
+**Custom on_create.sh** (only if you understand lifecycle scripts well):
 
 ```bash
 #!/bin/bash
@@ -528,19 +603,37 @@ EOF
 sudo yum install -y aws-neuronx-collectives aws-neuronx-runtime-lib aws-neuronx-tools
 ```
 
-### 2. Upload to S3
+### 2. Configure provisioning_parameters.json
+
+```json
+{
+  "version": "1.0.0",
+  "workload_manager": "slurm",
+  "controller_group": "controller-machine",
+  "worker_groups": [
+    {
+      "instance_group_name": "compute-nodes",
+      "partition_name": "compute"
+    }
+  ],
+  "fsx_dns_name": "fs-xxx.fsx.us-east-1.amazonaws.com",
+  "fsx_mountname": "xxxxx"
+}
+```
+
+### 3. Upload to S3
 
 ```bash
 aws s3 cp lifecycle-scripts/ s3://my-bucket/hyperpod/lifecycle-scripts/ --recursive
 ```
 
-### 3. Create Cluster
+### 4. Create Cluster
 
 ```bash
 aws sagemaker create-cluster \
   --cluster-name my-slurm-cluster \
   --instance-groups '[{
-    "InstanceGroupName": "controller",
+    "InstanceGroupName": "controller-machine",
     "InstanceType": "ml.m5.xlarge",
     "InstanceCount": 1,
     "LifeCycleConfig": {
@@ -549,7 +642,7 @@ aws sagemaker create-cluster \
     },
     "ExecutionRole": "arn:aws:iam::xxx:role/HyperPodRole"
   }, {
-    "InstanceGroupName": "workers",
+    "InstanceGroupName": "compute-nodes",
     "InstanceType": "ml.trn1.32xlarge",
     "InstanceCount": 2,
     "LifeCycleConfig": {
@@ -611,6 +704,113 @@ aws sagemaker delete-cluster --cluster-name NAME
 
 # Update software
 aws sagemaker update-cluster-software --cluster-name NAME
+```
+
+## Slurm-Specific Errors and Solutions
+
+### 1. CloudWatch Logs Not Appearing
+
+**Problem**: Log groups from HyperPod cluster not visible.
+
+**Solution**: By default, logs go to HyperPod platform account. Update CloudWatch agent config:
+```bash
+# Edit /opt/aws/amazon-cloudwatch-agent/sagemaker_cwagent_config.json
+# Update file_path to /var/log/provision/provisioning.log
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s -c \
+  file:/opt/aws/amazon-cloudwatch-agent/sagemaker_cwagent_config.json
+```
+
+### 2. NCCL Parallel Training Failures
+
+**Problem**: Jobs fail when using NCCL with Slurm.
+
+**Root Cause**: Linux `RemoveIPC=yes` cleans up IPC resources on logout.
+
+**Solution**: Create epilog script for cleanup:
+```bash
+#!/bin/bash
+# /opt/slurm/etc/epilog.sh
+for seg in $(ipcs -m | awk -v owner="$SLURM_JOB_USER" '$3 == owner {print $2}'); do
+    ipcrm -m "$seg"
+done
+for file in /dev/shm/nccl-*; do
+    [ -e "$file" ] && rm "$file"
+done
+```
+
+Add to `slurm.conf`: `Epilog="/opt/slurm/etc/epilog.sh"`
+
+### 3. Nodes DOWN/DRAINED After Reboot
+
+**Problem**: Nodes become DOWN/DRAINED after reboot.
+
+**Solutions**:
+```bash
+# Use Slurm reboot command (NOT sudo reboot)
+scontrol reboot nextstate=resume <node_list>
+
+# For GPU instances, increase boot timeout in slurm.conf
+TimeToResume=300
+```
+
+### 4. OOM Draining Issues
+
+**Problem**: Nodes keep draining due to out-of-memory.
+
+**Solution**: Enable cgroups in `slurm.conf`:
+```
+TaskPlugin=task/cgroup
+```
+
+Configure `/opt/slurm/etc/cgroup.conf`:
+```
+CgroupAutomount=yes
+ConstrainRAMSpace=yes
+MaxRAMPercent=99
+```
+
+### 5. Docker Not Installed Across Nodes
+
+**Problem**: Docker not available on compute nodes.
+
+**Solution**: Run lifecycle script manually:
+```bash
+cd /tmp/sagemaker-lifecycle-* && cd src/utils/
+srun -N <num_nodes> bash install_docker.sh
+```
+
+### 6. Slurmd Not Starting
+
+**Problem**: Slurm daemon fails to start on nodes.
+
+**Solution**:
+```bash
+ssh <node>
+sudo systemctl status slurmd
+sudo journalctl -xe  # diagnose
+sudo systemctl start slurmd
+```
+
+### 7. FSx Lustre Not Mounting
+
+**Problem**: FSx doesn't mount automatically.
+
+**Solution**: Check `provisioning_parameters.json`:
+- Verify `fsx_dns_name` format: `fs-xxx.fsx.us-east-1.amazonaws.com`
+- Verify `fsx_mountname` matches FSx configuration
+
+### 8. Instance Group Name Mismatch
+
+**Problem**: Cluster creation fails or nodes not properly configured.
+
+**Solution**: Ensure exact name match:
+```json
+// create_cluster.json
+"InstanceGroupName": "compute-nodes"
+
+// provisioning_parameters.json
+"instance_group_name": "compute-nodes"  // MUST MATCH EXACTLY
 ```
 
 ---
