@@ -565,17 +565,55 @@ spec:
    - May fail if system daemons reserve CPU
 
 2. **Partial resources** (`--accelerators`, `--vcpu`, `--memory`): Specify exact requirements
-   ```bash
-   hyp create hyp-pytorch-job \
-     --job-name my-job \
-     --image <IMAGE> \
-     --command "[python3,train.py]" \
-     --instance-type ml.trn1.32xlarge \
-     --accelerators 1 \
-     --vcpu 4 \
-     --memory 16
-   ```
-   **Note:** Cannot combine `--node-count` with resource flags.
+   - **IMPORTANT:** Accelerator requests must equal limits
+   - Cannot combine `--node-count` with resource flags
+
+### Recommended: Config File Approach
+
+For complex commands, use `hyp init` + config file instead of inline `--command`:
+
+```bash
+# 1. Initialize job config
+mkdir my-job && cd my-job
+hyp init hyp-pytorch-job
+
+# 2. Edit config.yaml
+```
+
+```yaml
+# config.yaml
+template: hyp-pytorch-job
+version: 1.1
+job_name: my-training-job
+image: 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training-neuronx:2.1.2-neuronx-py310-sdk2.20.2-ubuntu20.04
+namespace: default
+
+# Multi-line command using YAML block scalar
+command:
+  - python3
+  - -c
+  - |
+    import torch
+    print('PyTorch:', torch.__version__)
+    # Your training code here
+
+instance_type: ml.trn1.32xlarge
+
+# Partial resources (requests)
+accelerators: 1
+vcpu: 4
+memory: 16
+
+# Limits MUST match requests for accelerators
+accelerators_limit: 1
+vcpu_limit: 4
+memory_limit: 16
+```
+
+```bash
+# 3. Submit job
+hyp create
+```
 
 **For simple test jobs**, use standard Kubeflow PyTorchJob:
 ```yaml
