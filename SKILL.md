@@ -156,6 +156,79 @@ Prompt: Extract model requirements: transformers version, memory needs, context 
 - **Attention Implementation**: Some models need `attn_implementation="eager"`
 - **Memory Constraints**: Increase tensor parallelism or reduce sequence length
 
+## CRITICAL: Pre-Creation Validation Checklist
+
+**ALWAYS perform these validation steps BEFORE creating a HyperPod cluster:**
+
+### 1. Validate Instance Type is Supported for Cluster Usage
+
+**CRITICAL**: Not all SageMaker instance types are available for HyperPod clusters. The quota must specifically say "**for cluster usage**".
+
+```bash
+# List all cluster usage quotas
+aws service-quotas list-service-quotas \
+  --service-code sagemaker \
+  --region us-east-1 \
+  --query 'Quotas[?contains(QuotaName, `for cluster usage`)].[QuotaName,Value]' \
+  --output table
+
+# Check specific instance type (MUST include "for cluster usage" in name)
+aws service-quotas list-service-quotas \
+  --service-code sagemaker \
+  --region us-east-1 \
+  --query 'Quotas[?contains(QuotaName, `ml.trn1.32xlarge`) && contains(QuotaName, `cluster`)].[QuotaName,Value]' \
+  --output table
+```
+
+**IMPORTANT - Trainium Instance Limitations:**
+| Instance Type | HyperPod Support | Notes |
+|---------------|------------------|-------|
+| ml.trn1.32xlarge | YES | Default quota: 2 |
+| ml.trn1.2xlarge | **NO** | NOT supported for HyperPod clusters |
+| ml.trn1n.32xlarge | YES | Requires quota increase |
+| ml.trn2.48xlarge | YES | Requires quota increase |
+
+### 2. Validate EKS Requires 2+ Availability Zones
+
+**CRITICAL for EKS orchestrator**: EKS control plane requires subnets in at least **2 different Availability Zones**. Single-AZ configurations will fail with `InvalidParameterException`.
+
+```bash
+# Check AZ availability for your instance type
+aws ec2 describe-instance-type-offerings \
+  --location-type availability-zone \
+  --filters Name=instance-type,Values=trn1.32xlarge \
+  --region us-east-1 \
+  --query 'InstanceTypeOfferings[*].Location' \
+  --output text
+
+# Example config.yaml - MUST have 2+ AZs for EKS:
+# availability_zone_ids:
+#   - use1-az6  # Primary for Trainium workers
+#   - use1-az4  # Secondary for EKS HA
+```
+
+### 3. Validate Instance Count Against Quota
+
+```bash
+# Check total cluster instance limit
+aws service-quotas list-service-quotas \
+  --service-code sagemaker \
+  --region us-east-1 \
+  --query 'Quotas[?contains(QuotaName, `Total number of instances allowed across SageMaker HyperPod clusters`)].[QuotaName,Value]'
+```
+
+### 4. Validate AZ Capacity
+
+```bash
+# Check if the AZ has capacity for your instance type
+aws ec2 describe-instance-type-offerings \
+  --location-type availability-zone \
+  --filters Name=instance-type,Values=<INSTANCE_TYPE> \
+  --region <REGION> \
+  --query 'InstanceTypeOfferings[*].[InstanceType,Location]' \
+  --output table
+```
+
 ## Quota Management
 
 Check and request quotas before cluster creation:
@@ -226,19 +299,37 @@ hyp --help
 
 ## EKS Cluster Creation Workflow
 
+### MANDATORY: Pre-Flight Validation
+
+**BEFORE running any cluster creation commands, you MUST:**
+
+1. **Verify instance type is supported for cluster usage** (see Pre-Creation Validation Checklist)
+2. **Configure 2+ Availability Zones** in config.yaml for EKS
+3. **Confirm quota is sufficient** for desired instance count
+4. **Verify AZ capacity** for your instance type
+
 ### Option A: Using HyperPod CLI (Recommended)
 
 ```bash
+# 0. Run pre-flight validation (REQUIRED)
+aws service-quotas list-service-quotas --service-code sagemaker --region us-east-1 \
+  --query 'Quotas[?contains(QuotaName, `<INSTANCE_TYPE>`) && contains(QuotaName, `cluster`)].[QuotaName,Value]'
+
 # 1. Initialize cluster configuration
 hyp init cluster-stack
 
-# 2. Configure cluster parameters
+# 2. Edit config.yaml - CRITICAL: Ensure 2+ AZs for EKS!
+# availability_zone_ids:
+#   - use1-az6
+#   - use1-az4
+
+# 3. Configure cluster parameters
 hyp configure --resource-name-prefix my-hyperpod
 
-# 3. Validate configuration
+# 4. Validate configuration
 hyp validate
 
-# 4. Create cluster
+# 5. Create cluster
 hyp create --region us-east-1
 ```
 
@@ -344,6 +435,15 @@ hyp delete job JOB_NAME                       # Delete job
 
 ## EKS-Specific Errors
 
+**"InvalidParameterException" during EKS cluster creation**
+- Root cause: EKS requires subnets in at least 2 Availability Zones
+- Resolution: Add a second AZ to config.yaml:
+```yaml
+availability_zone_ids:
+  - use1-az6  # Primary
+  - use1-az4  # Secondary for EKS HA
+```
+
 **"EKS clusters with CONFIG_MAP authentication mode are not supported"**
 - Resolution: Update to `API_AND_CONFIG_MAP` mode (see above)
 
@@ -358,6 +458,27 @@ hyp delete job JOB_NAME                       # Delete job
 - Resolution: Add EC2 VPC permissions to execution role:
   - ec2:DescribeSubnets, ec2:DescribeSecurityGroups
   - ec2:CreateNetworkInterface, ec2:DeleteNetworkInterface
+
+## HyperPod Cluster Creation Errors
+
+**HyperPodClusterStack CREATE_FAILED with unsupported instance type**
+- Root cause: Instance type not supported for HyperPod clusters
+- Example: ml.trn1.2xlarge is NOT supported, only ml.trn1.32xlarge
+- Validation command:
+```bash
+aws service-quotas list-service-quotas --service-code sagemaker --region us-east-1 \
+  --query 'Quotas[?contains(QuotaName, `<INSTANCE_TYPE>`) && contains(QuotaName, `cluster`)]'
+```
+- Resolution: Use a supported instance type (see Instance Types Reference)
+
+**CloudFormation ROLLBACK_COMPLETE without clear error**
+- Check CloudTrail for actual API errors:
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventSource,AttributeValue=sagemaker.amazonaws.com \
+  --start-time "$(date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)" \
+  --query 'Events[*].[EventName,CloudTrailEvent]'
+```
 
 ---
 
