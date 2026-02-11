@@ -330,10 +330,16 @@ aws eks describe-cluster-versions --region us-east-1 --output table
 
 **Best Practice**: Use the **defaultVersion=True** version (currently 1.34) or the latest STANDARD_SUPPORT version.
 
-In config.yaml, always set:
-```yaml
-# Check latest with: aws eks describe-cluster-versions
-kubernetes_version: 1.35  # Use current default, NOT hardcoded old versions
+**Before setting kubernetes_version in config.yaml:**
+```
+WebFetch: https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html#kubernetes-release-calendar
+Prompt: What is the latest Kubernetes version available for EKS that is in standard support?
+```
+
+Or via CLI:
+```bash
+aws eks describe-cluster-versions --region us-east-1 \
+  --query 'clusterVersions[?status==`STANDARD_SUPPORT`].clusterVersion' --output text | head -1
 ```
 
 **Upgrading existing clusters** (one version at a time):
