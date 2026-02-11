@@ -145,19 +145,59 @@ aws eks describe-addon-versions --addon-name amazon-sagemaker-hyperpod-taskgover
 # 1. Install CLI
 pip install sagemaker-hyperpod
 
-# 2. Initialize
-hyp init cluster-stack
+# 2. Initialize cluster stack
+hyp init cluster-stack my-cluster
+cd my-cluster
 
 # 3. Edit config.yaml (ensure 2+ AZs!)
 
 # 4. Validate and create
-hyp validate && hyp create --region us-east-1
+hyp validate && hyp create cluster-stack --region us-east-1
 
 # 5. Set context
 hyp set-cluster-context --cluster-name <NAME> --region us-east-1
 ```
 
-**Job submission**: See [reference/eks-guide.md](reference/eks-guide.md#job-submission)
+## Submit Training Job (EKS)
+
+```bash
+# Option 1: Using config file (recommended)
+hyp init hyp-pytorch-job my-job
+cd my-job
+# Edit config.yaml
+hyp validate
+hyp create hyp-pytorch-job
+
+# Option 2: Command line
+hyp create hyp-pytorch-job \
+  --job-name my-job \
+  --image <ECR-IMAGE> \
+  --instance-type ml.trn1.32xlarge \
+  --node-count 1 \
+  --accelerators 16 \
+  --accelerators-limit 16
+```
+
+## Monitor Training Job (EKS)
+
+```bash
+# List jobs
+hyp list hyp-pytorch-job
+
+# Job details
+hyp describe hyp-pytorch-job --job-name <NAME>
+
+# View logs
+hyp get-logs hyp-pytorch-job --job-name <NAME> --follow
+
+# List pods
+hyp list-pods hyp-pytorch-job --job-name <NAME>
+
+# Delete job
+hyp delete hyp-pytorch-job --job-name <NAME>
+```
+
+**Full guide**: See [orchestrators/eks/job-submission.md](orchestrators/eks/job-submission.md)
 
 ---
 

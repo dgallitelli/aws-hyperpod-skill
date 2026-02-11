@@ -11,49 +11,120 @@ EKS orchestration supports multiple job submission methods:
 
 ## Method 1: HyperPod CLI (Recommended)
 
-### Basic Job Submission
+### Install CLI
+
+```bash
+pip install sagemaker-hyperpod
+hyp --version
+```
+
+### Set Cluster Context
+
+```bash
+# Connect to your HyperPod EKS cluster
+hyp set-cluster-context --cluster-name my-cluster --region us-east-1
+
+# Verify connection
+hyp get-cluster-context
+```
+
+### Option A: Using config.yaml (Recommended)
+
+```bash
+# Initialize job template
+hyp init hyp-pytorch-job my-job
+cd my-job
+
+# Edit config.yaml with your settings
+# Then validate and submit
+hyp validate
+hyp create hyp-pytorch-job
+```
+
+**Example config.yaml:**
+
+```yaml
+template: hyp-pytorch-job
+version: 1.1
+
+job_name: my-training-job
+image: 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training-neuronx:2.1.2-neuronx-py310-sdk2.20.2-ubuntu20.04
+namespace: default
+
+command:
+  - torchrun
+args:
+  - --nproc_per_node=16
+  - --nnodes=1
+  - /scripts/train.py
+
+environment:
+  NEURON_CC_FLAGS: "--model-type=transformer"
+  HF_HOME: "/tmp/huggingface"
+
+instance_type: ml.trn1.32xlarge
+node_count: 1
+tasks_per_node: 1
+
+accelerators: 16
+accelerators_limit: 16
+vcpu: 128
+memory: 512
+
+efa_interfaces: 8
+efa_interfaces_limit: 8
+```
+
+### Option B: Using Command Line
 
 ```bash
 hyp create hyp-pytorch-job \
   --job-name my-training-job \
-  --image 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:2.1.0-gpu-py310-cu118-ubuntu20.04-sagemaker \
-  --command '[python, train.py]' \
-  --instance-type ml.p5.48xlarge \
-  --node-count 4
-```
-
-### With Additional Options
-
-```bash
-hyp create hyp-pytorch-job \
-  --job-name llm-training \
-  --image your-ecr-repo/training:latest \
-  --command '[torchrun, --nproc_per_node=8, train.py]' \
+  --image 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:2.1.0-gpu-py310-cu118-ubuntu20.04-sagemaker \
+  --command '["python", "train.py"]' \
   --instance-type ml.p5.48xlarge \
   --node-count 4 \
-  --env "NCCL_DEBUG=INFO,HF_HOME=/data/cache" \
-  --volume-mounts "/fsx:/data" \
-  --namespace training
+  --accelerators 8 \
+  --accelerators-limit 8 \
+  --environment '{"NCCL_DEBUG":"INFO","HF_HOME":"/data/cache"}'
 ```
 
 ### Monitor Job
 
 ```bash
-# List jobs
-hyp get jobs
+# List all training jobs
+hyp list hyp-pytorch-job
 
 # Get job details
-hyp describe job my-training-job
+hyp describe hyp-pytorch-job --job-name my-training-job
+
+# List pods for a job
+hyp list-pods hyp-pytorch-job --job-name my-training-job
 
 # View logs
-hyp logs my-training-job
+hyp get-logs hyp-pytorch-job --job-name my-training-job
 
-# Stream logs
-hyp logs my-training-job --follow
+# Stream logs (follow)
+hyp get-logs hyp-pytorch-job --job-name my-training-job --follow
 
 # Delete job
-hyp delete job my-training-job
+hyp delete hyp-pytorch-job --job-name my-training-job
 ```
+
+### Common CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--job-name` | Name for the training job (required) |
+| `--image` | Docker image for training (required) |
+| `--instance-type` | Instance type (e.g., ml.trn1.32xlarge) |
+| `--node-count` | Number of nodes |
+| `--accelerators` | Number of accelerators (GPUs/Trainium) |
+| `--accelerators-limit` | Must equal `--accelerators` |
+| `--efa-interfaces` | EFA interfaces for high-speed networking |
+| `--environment` | JSON object of env vars |
+| `--volume` | Volume mounts (ConfigMap, PVC, hostPath) |
+| `--namespace` | Kubernetes namespace |
 
 ## Method 2: PyTorchJob (Kubernetes Native)
 
