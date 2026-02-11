@@ -312,6 +312,35 @@ hyp --help
 2. **Configure 2+ Availability Zones** in config.yaml for EKS
 3. **Confirm quota is sufficient** for desired instance count
 4. **Verify AZ capacity** for your instance type
+5. **Check latest Kubernetes version** - Avoid Extended Support charges
+
+### Kubernetes Version Selection (CRITICAL)
+
+**ALWAYS check the latest available EKS version before cluster creation:**
+
+```bash
+aws eks describe-cluster-versions --region us-east-1 --output table
+```
+
+**Version Status Guide:**
+| Status | Meaning | Cost Impact |
+|--------|---------|-------------|
+| STANDARD_SUPPORT | Actively supported | Normal pricing |
+| EXTENDED_SUPPORT | Past standard support | **Extra charges apply** |
+
+**Best Practice**: Use the **defaultVersion=True** version (currently 1.34) or the latest STANDARD_SUPPORT version.
+
+In config.yaml, always set:
+```yaml
+# Check latest with: aws eks describe-cluster-versions
+kubernetes_version: 1.34  # Use current default, NOT hardcoded old versions
+```
+
+**Upgrading existing clusters** (one version at a time):
+```bash
+aws eks update-cluster-version --name CLUSTER_NAME --region REGION --kubernetes-version 1.XX
+# Wait for completion, then upgrade add-ons before next version bump
+```
 
 ### Option A: Using HyperPod CLI (Recommended)
 
@@ -383,7 +412,158 @@ helm install hyperpod-dependencies HyperPodHelmChart --namespace kube-system
 
 Components installed: Kueue, Kubeflow Training Operator, MPI Operator, device plugins
 
+## Post-Cluster: EKS Add-ons (CRITICAL for `hyp` CLI)
+
+The HyperPod CLI (`hyp create`) requires the **Training Operator** add-on to submit jobs. Install these add-ons AFTER cluster creation.
+
+### Available HyperPod Add-ons
+
+| Add-on | Purpose | Required For |
+|--------|---------|--------------|
+| amazon-sagemaker-hyperpod-training-operator | HyperPodPyTorchJob CRD | `hyp create` job submission |
+| amazon-sagemaker-hyperpod-taskgovernance | Resource allocation, quotas | Multi-team clusters |
+| amazon-sagemaker-hyperpod-observability | Centralized logging/metrics | Production monitoring |
+
+### Install Training Operator (REQUIRED)
+
+**Prerequisites:**
+1. EKS Pod Identity Agent must be enabled
+2. cert-manager must be installed
+
+```bash
+# Step 1: Install cert-manager (prerequisite)
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml
+
+# Wait for cert-manager to be ready
+kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=300s
+
+# Step 2: Verify EKS Pod Identity Agent is installed
+aws eks describe-addon --cluster-name <EKS_CLUSTER_NAME> --addon-name eks-pod-identity-agent --region <REGION>
+
+# If not installed:
+aws eks create-addon --cluster-name <EKS_CLUSTER_NAME> --addon-name eks-pod-identity-agent --region <REGION>
+
+# Step 3: Install Training Operator add-on
+aws eks create-addon \
+  --cluster-name <EKS_CLUSTER_NAME> \
+  --addon-name amazon-sagemaker-hyperpod-training-operator \
+  --region <REGION>
+
+# Step 4: Verify installation
+kubectl get pods -n aws-hyperpod
+kubectl get crd | grep hyperpod
+```
+
+**Common Issue: Pod Identity Verification Failure**
+
+If Training Operator pod fails with:
+```
+Unable to verify AWS SageMaker auth, please verify Pod Identity configuration
+```
+
+**Solution:** Create Pod Identity association for the Training Operator:
+
+```bash
+# Step 1: Update IAM role trust policy to allow EKS Pod Identity
+# Add "pods.eks.amazonaws.com" as trusted principal with sts:AssumeRole and sts:TagSession
+
+# Step 2: Add SageMaker permissions to the role
+cat > /tmp/training-operator-policy.json << 'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Effect": "Allow",
+        "Action": [
+            "sagemaker:DescribeClusterNode",
+            "sagemaker:ListClusterNodes",
+            "sagemaker:DescribeCluster"
+        ],
+        "Resource": "*"
+    }]
+}
+EOF
+aws iam put-role-policy --role-name <ROLE_NAME> \
+  --policy-name HyperPodTrainingOperatorPolicy \
+  --policy-document file:///tmp/training-operator-policy.json
+
+# Step 3: Create Pod Identity association
+aws eks create-pod-identity-association \
+  --cluster-name <EKS_CLUSTER_NAME> \
+  --namespace aws-hyperpod \
+  --service-account hp-training-operator-controller-manager \
+  --role-arn arn:aws:iam::<ACCOUNT>:role/<ROLE_NAME> \
+  --region <REGION>
+
+# Step 4: Restart the Training Operator pod
+kubectl delete pod -n aws-hyperpod -l app.kubernetes.io/name=hp-training-operator
+```
+
+**Verify:**
+```bash
+aws eks list-pod-identity-associations --cluster-name <EKS_CLUSTER_NAME> --region <REGION>
+kubectl get pods -n aws-hyperpod  # Should show Running
+```
+
+### Install Other Add-ons (Optional)
+
+```bash
+# Task Governance (for resource quotas)
+aws eks create-addon \
+  --cluster-name <EKS_CLUSTER_NAME> \
+  --addon-name amazon-sagemaker-hyperpod-taskgovernance \
+  --region <REGION>
+
+# Observability (for centralized logging)
+aws eks create-addon \
+  --cluster-name <EKS_CLUSTER_NAME> \
+  --addon-name amazon-sagemaker-hyperpod-observability \
+  --region <REGION>
+```
+
+### Workaround: Use Kubeflow PyTorchJob
+
+If Training Operator fails to install, you can use standard Kubeflow PyTorchJob instead:
+
+```yaml
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: my-training-job
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training-neuronx:2.1.2-neuronx-py310-sdk2.20.2-ubuntu20.04
+              command: [python3, -c, "import torch; print(torch.__version__)"]
+              resources:
+                requests:
+                  aws.amazon.com/neuron: "1"
+                limits:
+                  aws.amazon.com/neuron: "1"
+          nodeSelector:
+            node.kubernetes.io/instance-type: ml.trn1.32xlarge
+```
+
 ## Job Submission (EKS)
+
+### Resource Allocation Note
+
+**HyperPodPyTorchJob** (via `hyp create`) requests **full node resources** by default:
+- For ml.trn1.32xlarge: 119 CPUs, 461Gi memory, 16 Neuron devices, 8 EFA
+- This may fail scheduling if system daemons use some CPU
+
+**For simple test jobs**, use standard Kubeflow PyTorchJob with explicit resource requests:
+```yaml
+resources:
+  requests:
+    aws.amazon.com/neuron: "1"  # Request only 1 Neuron device
+  limits:
+    aws.amazon.com/neuron: "1"
+```
 
 ### Using HyperPod CLI
 
