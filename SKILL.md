@@ -494,7 +494,21 @@ aws cloudtrail lookup-events \
 
 ### 1. Prepare Lifecycle Scripts
 
-Create `on_create.sh` for node initialization:
+**Recommended**: Use the sample lifecycle scripts from the AWS Samples repository:
+```bash
+git clone https://github.com/aws-samples/awsome-distributed-training.git
+cd awsome-distributed-training/1.architectures/5.sagemaker-hyperpod/
+```
+
+This repository contains production-ready lifecycle scripts for:
+- Slurm controller and compute nodes
+- EKS-based clusters
+- Trainium/Inferentia setup with Neuron SDK
+- NVIDIA GPU clusters with NCCL
+- FSx Lustre mounting
+- Health monitoring agents
+
+**Or create a minimal `on_create.sh`** for node initialization:
 
 ```bash
 #!/bin/bash
@@ -619,6 +633,11 @@ aws sagemaker update-cluster-software --cluster-name NAME
 - Check S3 bucket permissions
 - Validate script syntax
 - Review CloudWatch logs: `/aws/sagemaker/Clusters/<cluster>/<id>`
+- **Use sample scripts**: If your custom scripts fail, try the production-ready scripts from:
+  ```bash
+  git clone https://github.com/aws-samples/awsome-distributed-training.git
+  cd awsome-distributed-training/1.architectures/5.sagemaker-hyperpod/
+  ```
 
 **NodeUnhealthy**
 - Check node status via CLI
